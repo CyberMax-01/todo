@@ -1,0 +1,16 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/gcc",
+      "-c",
+      "-I/usr/local/include",
+      "-I/usr/local/include/leif",
+      "-o",
+      "main",
+      "main.c"
+    ],
+    "directory": "/home/cybermax/Programming/Projects/todo",
+    "file": "/home/cybermax/Programming/Projects/todo/main.c",
+    "output": "/home/cybermax/Programming/Projects/todo/main"
+  }
+]
