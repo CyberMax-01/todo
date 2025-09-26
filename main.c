@@ -1,6 +1,7 @@
 #include <GL/gl.h>
 #include <GLFW/glfw3.h>
 #include <leif/leif.h>
+#include <string.h>
 
 #define WIN_MARGIN 20.0f
 
@@ -25,12 +26,22 @@ typedef struct{
     entry_priority priority;
 } task_entry;
 
+typedef enum{
+    TAB_DASHBOARD = 0,
+    TAB_NEW_TASK
+} gui_tab;
+
 static int winw = 1270, winh = 700;
 static LfFont titlefont, smallfont;
 static entry_filter current_filter;
+static gui_tab current_tab;
 static task_entry* entries[1024];
 static uint32_t numentries = 0;
-static LfTexture removetexture;
+
+static LfTexture removetexture, backtexture;
+
+static LfInputField new_task_input;
+char new_task_input_buf[512];
 
 static void rendertopbar(){
 
@@ -48,7 +59,9 @@ static void rendertopbar(){
     props.corner_radius = 4.0f;
     lf_push_style_props(props);
     lf_set_line_should_overflow(false);
-    lf_button_fixed("New Task", width, -1);
+    if(lf_button_fixed("New Task", width, -1) == LF_CLICKED){
+        current_tab = TAB_NEW_TASK;
+    }
     lf_set_line_should_overflow(true);
     lf_pop_style_props();
 
@@ -100,6 +113,193 @@ static void renderfilters() {
     lf_set_line_should_overflow(true);
 }
 
+
+static void renderentries() {
+    lf_div_begin(
+        ((vec2s){lf_get_ptr_x(), lf_get_ptr_y()}),
+                 ((vec2s){winw - lf_get_ptr_x() - WIN_MARGIN, (winh - lf_get_ptr_y() - WIN_MARGIN)}),\
+                 true)
+
+    uint32_t renderedcount = 0;
+    for(uint32_t i =0; i < numentries; i++) {
+        task_entry* entry = entries[i];
+        if(current_filter == FILTER_LOW && entry->priority != PRIORITY_LOW) continue;
+        if(current_filter == FILTER_MEDIUM && entry->priority != PRIORITY_MEDIUM) continue;
+        if(current_filter == FILTER_HIGH && entry->priority != PRIORITY_HIGH) continue;
+        if(current_filter == FILTER_COMPLETED && !entry->completed) continue;
+        if(current_filter == FILTER_IN_PROGRESS && entry->completed) continue;
+
+        float priority_size = 15.0f;
+        float ptry_before = lf_get_ptr_y();
+        lf_set_ptr_x_absolute(lf_get_ptr_x() + 5.0f);
+        lf_set_ptr_y_absolute(lf_get_ptr_y() + 5.0f);
+
+        switch(entry->priority) {
+            case PRIORITY_LOW : {
+                lf_rect(priority_size, priority_size, (LfColor){76, 175, 80, 255}, 4.0f);
+                break;
+            }
+            case PRIORITY_MEDIUM : {
+                lf_rect(priority_size, priority_size, (LfColor){255, 235, 59, 255}, 4.0f);
+                break;
+            }
+            case PRIORITY_HIGH : {
+                lf_rect(priority_size, priority_size, (LfColor){244, 67, 54, 255}, 4.0f);
+                break;
+            }
+        }
+        lf_set_ptr_y_absolute(ptry_before);
+
+        {
+            LfUIElementProps props = lf_get_theme().button_props;
+            props.color = LF_NO_COLOR;
+            props.border_width = 0.0f; props.padding = 0.0f; props.margin_top = 5.0f; props.margin_left = 10.0f;
+            lf_push_style_props(props);
+
+            if(lf_image_button(((LfTexture){.id = removetexture.id, .width = 20.0f, .height = 20.f})) ==
+                LF_CLICKED) {
+                for(uint32_t j = i; j < numentries;j++) {
+                    entries[j] = entries[j + 1];
+                }
+                numentries--;
+                }
+                lf_pop_style_props();
+        }
+
+        {
+            LfUIElementProps props = lf_get_theme().checkbox_props;
+            props.border_width = 1.0f; props.corner_radius = 0.0f; props.margin_top = 0.0f; props.padding = 5.0f;
+            props.margin_left = 5.0f;
+            props.color = lf_color_from_zto((vec4s){0.05f, 0.05f, 0.05f, 1.0f});
+            lf_push_style_props(props);
+            if(lf_checkbox("", &entry->completed, LF_NO_COLOR, ((LfColor){65, 167, 204, 255})) == LF_CLICKED) {
+
+            }
+            lf_pop_style_props();
+        }
+
+        lf_push_font(&smallfont);
+        LfUIElementProps props = lf_get_theme().text_props;
+        props.margin_top = 0.0f;
+        props.margin_left = 5.0f;
+        lf_push_style_props(props);
+
+        float descptr_x = lf_get_ptr_x();
+        lf_text(entry->desc);
+
+        lf_set_ptr_x_absolute(descptr_x);
+        lf_set_ptr_y_absolute(lf_get_ptr_y() + smallfont.font_size);
+        props.text_color = (LfColor){150, 150, 150, 255};
+        lf_push_style_props(props);
+        lf_text(entry->date);
+        lf_pop_style_props();
+        lf_pop_font();
+        lf_next_line();
+
+        renderedcount++;
+    }
+    if(!renderedcount) {
+        lf_text("There is no task here.");
+    }
+    lf_div_end();
+}
+
+static void rendernewtask() {
+    lf_push_font(&titlefont);
+    {
+        LfUIElementProps props = lf_get_theme().text_props;
+        props.margin_bottom = 15.0f;
+        lf_push_style_props(props);
+        lf_text("Add a new Task");
+        lf_pop_font();
+    }
+
+    lf_next_line();
+
+    {
+        lf_push_font(&smallfont);
+        lf_text("Description");
+        lf_pop_font();
+
+        LfUIElementProps props = lf_get_theme().inputfield_props;
+        props.padding = 15.0f;
+        props.color = lf_color_from_zto((vec4s){0.5f, 0.5f, 0.5f, 1.0f});
+        props.corner_radius = 11;
+        props.text_color = LF_WHITE;
+        props.border_width = 1.0f;
+        props.border_color = new_task_input.selected ? LF_WHITE : (LfColor){ 175, 175, 175, 255};
+        props.corner_radius = 2.5f;
+        props.margin_bottom = 10.0f;
+        lf_push_style_props(props);
+        lf_input_text(&new_task_input);
+        lf_pop_style_props();
+    }
+
+    lf_next_line();
+
+    static int32_t selected_priority = -1;
+    {
+        lf_push_font(&smallfont);
+        lf_text("Priority");
+        lf_pop_font();
+
+        lf_next_line();
+        static const char *items[3] = {
+            "LOW",
+            "MEDIUM",
+            "HIGH"
+        };
+        static bool opened = false;
+        LfUIElementProps props = lf_get_theme().button_props;
+        props.color = (LfColor){ 75, 75, 75, 255};
+        props.border_width = 0.0f; props.corner_radius = 5.0f;
+        lf_push_style_props(props);
+        lf_dropdown_menu(items, "Priority", 3, 200, 80, &selected_priority, &opened);
+        lf_pop_style_props();
+    }
+
+    {
+        bool form_complete = (strlen(new_task_input_buf) && selected_priority != 1);
+        const char* text = "Add";
+        const float width = 150.0f;
+
+        LfUIElementProps props = lf_get_theme().button_props;
+        props.margin_left = 0.0f; props.margin_right = 0.0f;
+        props.corner_radius = 5.0f; props.border_width = 0.0f;
+        props.color = !form_complete ? (LfColor){80, 80, 80, 255} : (LfColor){65, 167, 204, 255};
+        lf_push_style_props(props);
+        lf_set_line_should_overflow(false);
+        lf_set_ptr_x_absolute(winw - (width + props.padding * 2.0f) - WIN_MARGIN);
+        lf_set_ptr_y_absolute(winh - (lf_button_dimension(text).y + props.padding * 2.0f) - WIN_MARGIN);
+
+        if(lf_button_fixed(text, width, -1) == LF_CLICKED && form_complete) {
+
+        }
+        lf_set_line_should_overflow(true);
+        lf_pop_style_props();
+    }
+
+    lf_next_line();
+
+    {
+        LfUIElementProps props = lf_get_theme().button_props;
+        props.color = LF_NO_COLOR; props.border_width = 0.0f;
+        props.padding = 0.0f; props.margin_top = 0.0f; props.margin_left = 0.0f;
+        props.margin_right = 0.0f; props.margin_bottom = 0.0f;
+        lf_push_style_props(props);
+        lf_set_line_should_overflow(false);
+        LfTexture backbutton = (LfTexture){.id = backtexture.id, .width = 20, .height = 40};
+        lf_set_ptr_y_absolute(winh - backbutton.height - WIN_MARGIN * 2.0f);
+        lf_set_ptr_x_absolute(WIN_MARGIN);
+
+        if(lf_image_button(backbutton) == LF_CLICKED) {
+            current_tab = TAB_DASHBOARD;
+        }
+        lf_set_line_should_overflow(true);
+        lf_pop_style_props();
+    }
+}
+
 int main(int argc, char *argv[]) {
 
     glfwInit();
@@ -118,13 +318,24 @@ int main(int argc, char *argv[]) {
     smallfont = lf_load_font("./fonts/inter.ttf", 20);
 
     removetexture = lf_load_texture("./icons/remove.png", true, LF_TEX_FILTER_LINEAR);
+    backtexture = lf_load_texture("./icons/back.png", true, LF_TEX_FILTER_LINEAR);
 
-    task_entry* entry = (task_entry*)malloc(sizeof(*entry));
-    entry->priority = PRIORITY_LOW;
-    entry->completed = false;
-    entry->date = "nothing";
-    entry->desc = "Do journal";
-    entries[numentries++] = entry;
+    memset(new_task_input_buf, 0, 512);
+    new_task_input = (LfInputField){
+        .width = 400,
+        .buf = new_task_input_buf,
+        .buf_size = 512,
+        .placeholder = "What is there to do ?"
+    };
+
+    for(uint32_t i = 0; i < 5; i++) {
+        task_entry* entry = (task_entry*)malloc(sizeof(*entry));
+        entry->priority = PRIORITY_LOW;
+        entry->completed = false;
+        entry->date = "nothing";
+        entry->desc = "Do journal";
+        entries[numentries++] = entry;
+    }
 
     while(!glfwWindowShouldClose(window)) {
         glClear(GL_COLOR_BUFFER_BIT);
@@ -137,99 +348,18 @@ int main(int argc, char *argv[]) {
             ((vec2s){winw - WIN_MARGIN * 2.0f, winh - WIN_MARGIN * 2.0f}),
             true);
 
-        rendertopbar();
-        lf_next_line();
-        renderfilters();
-        lf_next_line();
-
-        {
-            lf_div_begin(
-                ((vec2s){lf_get_ptr_x(), lf_get_ptr_y()}),
-                ((vec2s){winw - lf_get_ptr_x() - WIN_MARGIN, (winh - lf_get_ptr_y() - WIN_MARGIN)}),\
-                true)
-
-            uint32_t renderedcount = 0;
-            for(uint32_t i =0; i < numentries; i++) {
-                task_entry* entry = entries[i];
-                if(current_filter == FILTER_LOW && entry->priority != PRIORITY_LOW) continue;
-                if(current_filter == FILTER_MEDIUM && entry->priority != PRIORITY_MEDIUM) continue;
-                if(current_filter == FILTER_HIGH && entry->priority != PRIORITY_HIGH) continue;
-                if(current_filter == FILTER_COMPLETED && !entry->completed) continue;
-                if(current_filter == FILTER_IN_PROGRESS && entry->completed) continue;
-
-                float priority_size = 15.0f;
-                float ptry_before = lf_get_ptr_y();
-                lf_set_ptr_x_absolute(lf_get_ptr_x() + 5.0f);
-                lf_set_ptr_y_absolute(lf_get_ptr_y() + 5.0f);
-
-                switch(entry->priority) {
-                    case PRIORITY_LOW : {
-                        lf_rect(priority_size, priority_size, (LfColor){76, 175, 80, 255}, 4.0f);
-                        break;
-                    }
-                    case PRIORITY_MEDIUM : {
-                        lf_rect(priority_size, priority_size, (LfColor){255, 235, 59, 255}, 4.0f);
-                        break;
-                    }
-                    case PRIORITY_HIGH : {
-                        lf_rect(priority_size, priority_size, (LfColor){244, 67, 54, 255}, 4.0f);
-                        break;
-                    }
-                }
-                lf_set_ptr_y_absolute(ptry_before);
-
-                {
-                    LfUIElementProps props = lf_get_theme().button_props;
-                    props.color = LF_NO_COLOR;
-                    props.border_width = 0.0f; props.padding = 0.0f; props.margin_top = 5.0f; props.margin_left = 10.0f;
-                    lf_push_style_props(props);
-
-                    if(lf_image_button(((LfTexture){.id = removetexture.id, .width = 20.0f, .height = 20.f})) ==
-                        LF_CLICKED) {
-                        for(uint32_t j = i; j < numentries;j++) {
-                            entries[j] = entries[j + 1];
-                        }
-                        numentries--;
-                    }
-                    lf_pop_style_props();
-                }
-
-                {
-                    LfUIElementProps props = lf_get_theme().checkbox_props;
-                    props.border_width = 1.0f; props.corner_radius = 0.0f; props.margin_top = 0.0f; props.padding = 5.0f;
-                    props.margin_left = 5.0f;
-                    props.color = lf_color_from_zto((vec4s){0.05f, 0.05f, 0.05f, 1.0f});
-                    lf_push_style_props(props);
-                    if(lf_checkbox("", &entry->completed, LF_NO_COLOR, ((LfColor){65, 167, 204, 255})) == LF_CLICKED) {
-
-                    }
-                    lf_pop_style_props();
-                }
-
-                lf_push_font(&smallfont);
-                LfUIElementProps props = lf_get_theme().text_props;
-                props.margin_top = 0.0f;
-                props.margin_left = 5.0f;
-                lf_push_style_props(props);
-
-                float descptr_x = lf_get_ptr_x();
-                lf_text(entry->desc);
-
-                lf_set_ptr_x_absolute(descptr_x);
-                lf_set_ptr_y_absolute(lf_get_ptr_y() + smallfont.font_size);
-                props.text_color = (LfColor){150, 150, 150, 255};
-                lf_push_style_props(props);
-                lf_text(entry->date);
-                lf_pop_style_props();
-                lf_pop_font();
+        switch(current_tab) {
+            case TAB_DASHBOARD : {
+                rendertopbar();
                 lf_next_line();
-
-                renderedcount++;
+                renderfilters();
+                lf_next_line();
+                renderentries();
+                break;
             }
-            if(!renderedcount) {
-                lf_text("There is no task here.");
+            case TAB_NEW_TASK: {
+                rendernewtask();
             }
-            lf_div_end();
         }
 
         lf_div_end();
