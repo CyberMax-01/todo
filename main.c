@@ -43,6 +43,51 @@ static LfTexture removetexture, backtexture;
 static LfInputField new_task_input;
 char new_task_input_buf[512];
 
+char* get_command_output(const char* cmd) {
+    FILE* fp;
+    static char buffer[1024];
+    char* result = NULL;
+    size_t result_size = 0;
+
+    /* Open the command for reading. */
+    fp = popen(cmd, "r");
+    if (fp == NULL) {
+        printf("Failed to run command\n" );
+        return NULL;
+    }
+
+    /* Read the output a line at a time - output it. */
+    while (fgets(buffer, sizeof(buffer), fp) != NULL) {
+        size_t buffer_len = strlen(buffer);
+        char* temp = realloc(result, result_size + buffer_len + 1);
+        if(temp == NULL) {
+            printf("Memory allocation failed\n");
+            free(result);
+            pclose(fp);
+            return NULL;
+        }
+        result = temp;
+        strcpy(result + result_size, buffer);
+        result_size += buffer_len;
+    }
+
+    /* close */
+    pclose(fp);
+
+    return result;
+}
+
+
+static int compare_priority(const void* a, const void* b) {
+    task_entry* entryA = *(task_entry**)a;
+    task_entry* entryB = *(task_entry**)b;
+
+    return (int)entryB->priority - (int)entryA->priority;
+}
+static void sort_entries_by_priority() {
+    qsort(entries, numentries, sizeof(task_entry*), compare_priority);
+}
+
 static void rendertopbar(){
 
     lf_push_font(&titlefont);
@@ -134,6 +179,18 @@ static void renderentries() {
         lf_set_ptr_x_absolute(lf_get_ptr_x() + 5.0f);
         lf_set_ptr_y_absolute(lf_get_ptr_y() + 5.0f);
 
+        bool clicked_priority = lf_hovered(((vec2s){lf_get_ptr_x(), lf_get_ptr_y()}), ((vec2s){priority_size, priority_size})) &&
+         lf_mouse_button_went_down(GLFW_MOUSE_BUTTON_LEFT);
+
+        if(clicked_priority) {
+            if(entry->priority + 1 >= PRIORITY_HIGH + 1) {
+                entry->priority = 0;
+            } else {
+                entry->priority++;
+            }
+            sort_entries_by_priority();
+        }
+
         switch(entry->priority) {
             case PRIORITY_LOW : {
                 lf_rect(priority_size, priority_size, (LfColor){76, 175, 80, 255}, 4.0f);
@@ -221,6 +278,7 @@ static void rendernewtask() {
         lf_text("Description");
         lf_pop_font();
 
+        lf_next_line();
         LfUIElementProps props = lf_get_theme().inputfield_props;
         props.padding = 15.0f;
         props.color = lf_color_from_zto((vec4s){0.5f, 0.5f, 0.5f, 1.0f});
@@ -259,7 +317,7 @@ static void rendernewtask() {
     }
 
     {
-        bool form_complete = (strlen(new_task_input_buf) && selected_priority != 1);
+        bool form_complete = (strlen(new_task_input_buf) && selected_priority != -1);
         const char* text = "Add";
         const float width = 150.0f;
 
@@ -273,7 +331,18 @@ static void rendernewtask() {
         lf_set_ptr_y_absolute(winh - (lf_button_dimension(text).y + props.padding * 2.0f) - WIN_MARGIN);
 
         if(lf_button_fixed(text, width, -1) == LF_CLICKED && form_complete) {
+            task_entry* entry = (task_entry*)malloc(sizeof(task_entry));
+            entry->completed = false;
+            entry->priority = selected_priority;
+            entry->date = get_command_output("date +\"%d.%m.%Y, %H:%M\"");
 
+            char* new_desc = (char*)malloc(strlen(new_task_input_buf) + 1);
+            strcpy(new_desc, new_task_input_buf);
+
+            entry->desc = new_desc;
+            entries[numentries++] = entry;
+            memset(new_task_input_buf, 0, 512);
+            sort_entries_by_priority();
         }
         lf_set_line_should_overflow(true);
         lf_pop_style_props();
@@ -329,12 +398,7 @@ int main(int argc, char *argv[]) {
     };
 
     for(uint32_t i = 0; i < 5; i++) {
-        task_entry* entry = (task_entry*)malloc(sizeof(*entry));
-        entry->priority = PRIORITY_LOW;
-        entry->completed = false;
-        entry->date = "nothing";
-        entry->desc = "Do journal";
-        entries[numentries++] = entry;
+        
     }
 
     while(!glfwWindowShouldClose(window)) {
@@ -359,6 +423,7 @@ int main(int argc, char *argv[]) {
             }
             case TAB_NEW_TASK: {
                 rendernewtask();
+                break;
             }
         }
 
